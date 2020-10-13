@@ -581,7 +581,7 @@ func convertIngressControllerToMap(existingIngress []operatorv1.IngressControlle
 	ingressMap := make(map[string]operatorv1.IngressController)
 
 	for _, ingress := range existingIngress {
-		ingressMap[ingress.Spec.Domain] = ingress
+		ingressMap[ingress.Status.Domain] = ingress
 	}
 	return ingressMap
 }
@@ -597,9 +597,24 @@ func checkExistingIngress(existingMap map[string]operatorv1.IngressController, p
 	return true
 }
 
-// doesIngressMatch checks if application ingress in PublishingStrategy CR matches with IngressController CR
+/*
+	doesIngressMatch checks if application ingress in PublishingStrategy CR matches with IngressController CR
+
+	Cases that will return False (trigger a delete/replace):
+	* ps.dnsname != ingress.status.domain
+	* ps.cert.name != ingress.spec.defaultcert.name
+	* ps.listening != ingress.status.EndpointPublishingStrategy.LoadBalancer.Scope
+
+	routeSelector is a bit more involved:
+	the PS.routeSelector normally has a value (empty dict {})
+	the ingress.routeSelector is by default nil
+
+	* if ps.routeSelector.matchLabel = nil && ingress.routeselector == nil; return tru
+
+
+*/
 func isOnCluster(publishingStrategyIngress *cloudingressv1alpha1.ApplicationIngress, ingressController operatorv1.IngressController) bool {
-	if publishingStrategyIngress.DNSName != ingressController.Spec.Domain {
+	if publishingStrategyIngress.DNSName != ingressController.Status.Domain {
 		return false
 	}
 	if publishingStrategyIngress.Certificate.Name != ingressController.Spec.DefaultCertificate.Name {
@@ -610,21 +625,26 @@ func isOnCluster(publishingStrategyIngress *cloudingressv1alpha1.ApplicationIngr
 	if ingressController.Status.EndpointPublishingStrategy.LoadBalancer == nil && capListening == "Internal" {
 		return false
 	}
+
+	/* Not sure this is needed.
 	if ingressController.Status.EndpointPublishingStrategy.LoadBalancer == nil && capListening == "External" {
 		return true
 	}
+	*/
 	if capListening != string(ingressController.Status.EndpointPublishingStrategy.LoadBalancer.Scope) {
 		return false
 	}
-	if publishingStrategyIngress.RouteSelector.MatchLabels == nil {
+
+	if publishingStrategyIngress.RouteSelector.MatchLabels == nil && ingressController.Spec.RouteSelector == nil {
 		return true
-	}
-	if (publishingStrategyIngress.RouteSelector.MatchLabels == nil) != (ingressController.Spec.RouteSelector == nil) {
+	} else if (publishingStrategyIngress.RouteSelector.MatchLabels == nil) != (ingressController.Spec.RouteSelector == nil) {
 		return false
+	} else {
+		isRouteSelectorEqual := reflect.DeepEqual(ingressController.Spec.RouteSelector.MatchLabels, publishingStrategyIngress.RouteSelector.MatchLabels)
+		if !isRouteSelectorEqual {
+			return false
+		}
 	}
-	isRouteSelectorEqual := reflect.DeepEqual(ingressController.Spec.RouteSelector.MatchLabels, publishingStrategyIngress.RouteSelector.MatchLabels)
-	if !isRouteSelectorEqual {
-		return false
-	}
+
 	return true
 }
